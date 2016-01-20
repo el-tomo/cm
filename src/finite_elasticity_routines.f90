@@ -2416,8 +2416,10 @@ CONTAINS
     REAL(DP) :: ffact,dfdJfact !coupled elasticity Darcy
     INTEGER(INTG) :: DARCY_MASS_INCREASE_ENTRY !position of mass-increase entry in dependent-variable vector
     REAL(DP) :: VALUE,TITIN_VALUE,VAL1,VAL2
-    REAL(DP) :: WV_PRIME    
-    REAL(DP) :: F_a(3,3),F_aT(3,3),C_a(3,3),C_aINV(3,3),lambda_a
+    REAL(DP) :: WV_PRIME,TOL
+    REAL(DP) :: F_e(3,3),F_a(3,3),F_a_inv(3,3),F_a_T(3,3),C_a(3,3),C_a_inv(3,3),lambda_a
+    REAL(DP) :: SARCO_LENGTH,FREE_ENERGY,FREE_ENERGY_0,XB_ENERGY
+    REAL(DP) :: MAX_NUMBER_OF_XB,ENERGY_PER_XB,FORCE_LENGTH,I_1e
 
     CALL ENTERS("FINITE_ELASTICITY_GAUSS_CAUCHY_TENSOR",ERR,ERROR,*999)
 
@@ -2498,18 +2500,76 @@ CONTAINS
         & -(C(1)*I1+2.0_DP*C(2)*I2-1.5_DP*P*Jznu**(5.0_DP/3.0_DP))/3.0_DP*AZU) 
                               
     CASE(EQUATIONS_SET_ACTIVE_STRAIN_SUBTYPE)
-      lambda_a = C(2)
+    
+      MAX_NUMBER_OF_XB=5.0_DP
+      ENERGY_PER_XB=1.0_DP
+
+      SARCO_LENGTH=DZDNU(1,1)
+      
+      ! Calculate Filament-Overlap
+      IF(SARCO_LENGTH.LE.0.635_DP) THEN
+        FORCE_LENGTH=0.0_DP
+      ELSE IF(SARCO_LENGTH.LE.0.835_DP) THEN 
+        FORCE_LENGTH=4.2_DP*(SARCO_LENGTH-0.635_DP)
+      ELSE IF(SARCO_LENGTH.LE.1.0_DP) THEN
+        FORCE_LENGTH=0.84_DP+0.9697_DP*(SARCO_LENGTH-0.835_DP)
+      ELSE IF(SARCO_LENGTH.LE.1.125_DP) THEN
+        FORCE_LENGTH=1.0_DP
+      ELSE IF(SARCO_LENGTH.LE.1.825_DP) THEN
+        FORCE_LENGTH=1.0_DP-1.4286_DP*(SARCO_LENGTH-1.125_DP)
+      ELSE
+        FORCE_LENGTH=0.0_DP
+      ENDIF
+
+      !Mechanical Energy stored in cross-bridges
+      XB_ENERGY=MAX_NUMBER_OF_XB*FORCE_LENGTH*C(2)*ENERGY_PER_XB
+
+      !Initalize lambda_a
+      lambda_a=1.0_DP  
+      
+      F_a_inv=0.0_DP
+      F_a_inv(1,1)=1/lambda_a
+      F_a_inv(2,2)=1.0_DP
+      F_a_inv(3,3)=1.0_DP
+
+      CALL MATRIX_PRODUCT(DZDNU,F_a_inv,F_e,ERR,ERROR,*999)
+      I_1e=F_e(1,1)+F_e(2,2)+F_e(3,3)
+
+      !Neo-Hook Material
+      FREE_ENERGY_0=1.0_DP/2.0_DP*C(1)*(I_1e-3.0_DP)
+      FREE_ENERGY=FREE_ENERGY_0
+
+      VALUE=XB_ENERGY-(FREE_ENERGY-FREE_ENERGY_0)
+
+      TOL=0.001_DP
+
+      DO WHILE (ABS(VALUE).GE.TOL)
+        lambda_a=lambda_a-0.0001_DP
+
+        F_a_inv=0.0_DP
+        F_a_inv(1,1)=1/lambda_a
+        F_a_inv(2,2)=1.0_DP
+        F_a_inv(3,3)=1.0_DP
+
+        CALL MATRIX_PRODUCT(DZDNU,F_a_inv,F_e,ERR,ERROR,*999)
+        I_1e=F_e(1,1)+F_e(2,2)+F_e(3,3)
+
+        FREE_ENERGY=1.0_DP/2.0_DP*(I_1e-3.0_DP)
+
+        VALUE=XB_ENERGY-(FREE_ENERGY-FREE_ENERGY_0)
+      ENDDO
+    
       F_a = 0.0_DP
       F_a(1,1) = lambda_a
       F_a(2,2) = 1.0_DP
       F_a(3,3) = 1.0_DP
       
       ! Neo-Hook
-      CALL MATRIX_TRANSPOSE(F_a,F_aT,ERR,ERROR,*999)
-      CALL MATRIX_PRODUCT(F_aT,F_a,C_a,ERR,ERROR,*999)
-      CALL INVERT(C_a,C_aINV,a,ERR,ERROR,*999) !a is not required (=1/lambda_a^2 ?)
+      CALL MATRIX_TRANSPOSE(F_a,F_a_T,ERR,ERROR,*999)
+      CALL MATRIX_PRODUCT(F_a_T,F_a,C_a,ERR,ERROR,*999)
+      CALL INVERT(C_a,C_a_inv,a,ERR,ERROR,*999) !a is not required (=1/lambda_a^2 ?)
       
-      PIOLA_TENSOR=C(1)*C_aINV+2.0_DP*P*AZU
+      PIOLA_TENSOR=C(1)*C_a_inv+2.0_DP*P*AZU
       
     CASE(EQUATIONS_SET_MOONEY_RIVLIN_SUBTYPE,EQUATIONS_SET_MOONEY_RIVLIN_ACTIVECONTRACTION_SUBTYPE,EQUATIONS_SET_MEMBRANE_SUBTYPE, &
       & EQUATIONS_SET_NO_SUBTYPE, &
